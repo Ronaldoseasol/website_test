@@ -1,10 +1,24 @@
 const puppeteer = require('puppeteer');
+const readline = require('readline');
 
-async function acceptLastReservation() {
+function askQuestion(query) {
+  const rl = readline.createInterface({
+    input: process.stdin,
+    output: process.stdout
+  });
+
+  return new Promise(resolve => rl.question(query, ans => {
+    rl.close();
+    resolve(ans.trim());
+  }));
+}
+
+async function acceptSelectedReservation() {
   const browser = await puppeteer.launch({ headless: true });
   const page = await browser.newPage();
 
   try {
+    // ───── 1. LOGIN ─────
     await page.goto('http://ec2-13-228-238-105.ap-southeast-1.compute.amazonaws.com:12345/', { waitUntil: 'networkidle2' });
 
     const inputs = await page.$$('input');
@@ -19,22 +33,42 @@ async function acceptLastReservation() {
     await page.waitForNavigation({ waitUntil: 'networkidle2' });
     console.log('Logged in successfully');
 
-    /* ───── 2. GO TO RESERVATIONS ───── */
+    // ───── 2. GO TO RESERVATIONS ─────
     await page.goto('http://ec2-13-228-238-105.ap-southeast-1.compute.amazonaws.com:12345/reservations', { waitUntil: 'networkidle2' });
-    await new Promise(r => setTimeout(r, 30000));
-    const rows = await page.$$('table tbody tr');
-    console.log(`Found ${rows.length} reservations`);
-    if (rows.length === 0) return console.log('No reservations found.');
-
-    const lastRow = rows.at(-1);
-    const moreBtn = await lastRow.$('button');
-    if (!moreBtn) return console.log('Couldn’t find "..." button');
-
-    await moreBtn.click();
-    console.log('Clicked "..." button');
     await new Promise(r => setTimeout(r, 3000));
 
-    /* ───── 3. CLICK APPROVE ───── */
+    const rows = await page.$$('table tbody tr');
+    if (rows.length === 0) return console.log('No reservations found.');
+
+    // ───── 3. LIST RESERVATIONS ─────
+    const reservationMap = {};
+    console.log('\nAvailable Reservations:\n');
+    for (let i = 0; i < rows.length; i++) {
+      const cells = await rows[i].$$('td');
+      const id = await cells[1].evaluate(node => node.textContent.trim());
+      const status = await cells[2].evaluate(node => node.textContent.trim());
+      const buyer = await cells[3].evaluate(node => node.textContent.trim());
+      const seller = await cells[4].evaluate(node => node.textContent.trim());
+
+      console.log(`ID: ${id} | Status: ${status} | Buyer: ${buyer} | Seller: ${seller}`);
+      reservationMap[id] = rows[i];
+    }
+
+    const selectedId = await askQuestion('\nEnter Reservation ID to approve: ');
+    const selectedRow = reservationMap[selectedId];
+    if (!selectedRow) {
+      console.log('Invalid Reservation ID');
+      return;
+    }
+
+    // ───── 4. CLICK "..." BUTTON ─────
+    const moreBtn = await selectedRow.$('button');
+    if (!moreBtn) return console.log('Couldn’t find "..." button');
+    await moreBtn.click();
+    console.log('Clicked "..." button');
+    await new Promise(r => setTimeout(r, 2000));
+
+    // ───── 5. CLICK APPROVE ─────
     const menuItems = await page.$$('[role="menuitem"]');
     let approveClicked = false;
     for (const item of menuItems) {
@@ -46,12 +80,12 @@ async function acceptLastReservation() {
         break;
       }
     }
+
     if (!approveClicked) return console.log('Approve menu item not found');
 
-    /* ───── 4. HANDLE MODAL ───── */
+    // ───── 6. HANDLE MODAL ─────
     await page.waitForSelector('[role="alertdialog"]', { timeout: 5000 });
 
-    // Wait for checkbox with role="checkbox" and click it
     const checkbox = await page.$('[role="checkbox"]');
     if (checkbox) {
       await checkbox.click();
@@ -60,7 +94,6 @@ async function acceptLastReservation() {
       console.log('Checkbox not found');
     }
 
-    // Find and click the Confirm button
     const buttons = await page.$$('button');
     let confirmClicked = false;
     for (const btn of buttons) {
@@ -80,20 +113,20 @@ async function acceptLastReservation() {
       console.log('Confirm button not found');
     }
 
-    /* ───── 5. Optional: wait for success indicator ───── */
+    // ───── 7. Wait for success ─────
     await new Promise(r => setTimeout(r, 3000));
     try {
       await page.waitForSelector('.toast-success, .alert-success', { timeout: 3000 });
       console.log('Approval successful');
-    } catch {
-    }
+    } catch {}
 
   } catch (err) {
     console.error('An error occurred:', err);
   } finally {
     await new Promise(r => setTimeout(r, 3000));
+    await browser.close();
     console.log('Done');
   }
 }
 
-acceptLastReservation();
+acceptSelectedReservation();
